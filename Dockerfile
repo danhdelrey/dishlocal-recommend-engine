@@ -1,20 +1,24 @@
-# Bắt đầu từ một hình ảnh Python 3.10 chính thức
-FROM python:3.10-slim
+# Bước 1: Bắt đầu từ một hình ảnh Python 3.10 chính thức.
+# Phiên bản đầy đủ (không phải -slim) thường có sẵn các công cụ cần thiết hơn.
+FROM python:3.10
 
-# Đặt thư mục làm việc bên trong container
+# Bước 2: Thiết lập thư mục làm việc bên trong container
 WORKDIR /app
 
-# Sao chép file requirements.txt vào trước để tận dụng cache
+# Bước 3: Cập nhật apt và cài đặt các công cụ build cần thiết từ kho của Debian
+# 'python3-dev' là tên gói chứa header files cho phiên bản python3 mặc định của image
+RUN apt-get update && \
+    apt-get install -y build-essential python3-dev
+
+# Bước 4: Sao chép file requirements.txt vào trước
 COPY requirements.txt .
 
-# Cài đặt các công cụ build cần thiết (vẫn cần thiết để build lightfm trong quá trình tạo image)
-RUN apt-get update && apt-get install -y build-essential
-
-# Cài đặt các thư viện Python
+# Bước 5: Cài đặt tất cả các thư viện Python
+# Bước này sẽ sử dụng build-essential và python3-dev để build lightfm
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Sao chép toàn bộ mã nguồn của dự án vào container
+# Bước 6: Sao chép toàn bộ mã nguồn của dự án vào container
 COPY . .
 
-# Lệnh mặc định sẽ chạy khi container được khởi động
-CMD ["python", "prod/train.py"]
+# Bước 7: Lệnh mặc định sẽ được chạy khi container khởi động
+CMD ["python"]
