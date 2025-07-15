@@ -1,43 +1,45 @@
+# Tên của workflow, sẽ hiển thị trên tab Actions của GitHub
 name: Dishlocal Model Training
 
 on:
   schedule:
+    # Chạy tự động vào lúc 2 giờ sáng (UTC) mỗi ngày
     - cron: '0 2 * * *'
+  
   push:
     branches:
-      - main
-      - develop
+      - main     # Kích hoạt khi đẩy lên nhánh 'main' (cho Production)
+      - develop  # Kích hoạt khi đẩy lên nhánh 'develop' (cho Development)
+
   workflow_dispatch:
 
+# Các công việc cần thực hiện
 jobs:
   run-training-script:
     runs-on: ubuntu-latest
     
     steps:
+      # Bước 1: Lấy mã nguồn từ repository của bạn
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Bước 2: Thiết lập môi trường Python 3.10
       - name: Set up Python 3.10
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
       # ================================================================
-      # SỬA LỖI TRIỆT ĐỂ BẰNG CÁCH THÊM PPA
+      # SỬA LỖI DUY NHẤT VÀ QUAN TRỌNG NHẤT Ở ĐÂY
+      # Cài đặt 'wheel' trước khi cài các thư viện khác
       # ================================================================
-      - name: Install build dependencies
-        run: |
-          # Thêm PPA deadsnakes để apt có thể tìm thấy python3.10-dev
-          sudo add-apt-repository ppa:deadsnakes/ppa -y
-          sudo apt-get update
-          # Bây giờ lệnh cài đặt sẽ thành công
-          sudo apt-get install -y build-essential python3.10-dev
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install wheel
           pip install -r requirements.txt
 
+      # Bước 4: Chạy script cho môi trường Production
       - name: Run Production Training Script
         if: github.ref == 'refs/heads/main' || github.event_name == 'schedule'
         run: python prod/train.py
@@ -45,6 +47,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_PROD_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_PROD_SERVICE_KEY }}
 
+      # Bước 5: Chạy script cho môi trường Development
       - name: Run Development Training Script
         if: github.ref == 'refs/heads/develop'
         run: python dev/train.py
