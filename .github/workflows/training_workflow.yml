@@ -1,52 +1,43 @@
-# Tên của workflow, sẽ hiển thị trên tab Actions của GitHub
 name: Dishlocal Model Training
 
-# Các sự kiện sẽ kích hoạt workflow này
 on:
   schedule:
-    # Chạy tự động vào lúc 2 giờ sáng (UTC) mỗi ngày
     - cron: '0 2 * * *'
-  
   push:
     branches:
-      - main     # Kích hoạt khi đẩy lên nhánh 'main' (cho Production)
-      - develop  # Kích hoạt khi đẩy lên nhánh 'develop' (cho Development)
-
+      - main
+      - develop
   workflow_dispatch:
 
-# Các công việc cần thực hiện
 jobs:
   run-training-script:
-    runs-on: ubuntu-latest # Luôn dùng máy ảo Ubuntu mới nhất
+    runs-on: ubuntu-latest
     
     steps:
-      # Bước 1: Lấy mã nguồn từ repository của bạn
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Bước 2: Thiết lập môi trường Python 3.10
       - name: Set up Python 3.10
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
       # ================================================================
-      # SỬA LỖI CUỐI CÙNG Ở ĐÂY
-      # Bước 2.5: Cài đặt ĐẦY ĐỦ các công cụ build
+      # SỬA LỖI TRIỆT ĐỂ BẰNG CÁCH THÊM PPA
       # ================================================================
       - name: Install build dependencies
         run: |
+          # Thêm PPA deadsnakes để apt có thể tìm thấy python3.10-dev
+          sudo add-apt-repository ppa:deadsnakes/ppa -y
           sudo apt-get update
-          # Cài cả trình biên dịch VÀ các file header của Python 3.10
+          # Bây giờ lệnh cài đặt sẽ thành công
           sudo apt-get install -y build-essential python3.10-dev
 
-      # Bước 3: Cài đặt tất cả các thư viện từ requirements.txt
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Bước 4: Chạy script cho môi trường Production
       - name: Run Production Training Script
         if: github.ref == 'refs/heads/main' || github.event_name == 'schedule'
         run: python prod/train.py
@@ -54,7 +45,6 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_PROD_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_PROD_SERVICE_KEY }}
 
-      # Bước 5: Chạy script cho môi trường Development
       - name: Run Development Training Script
         if: github.ref == 'refs/heads/develop'
         run: python dev/train.py
