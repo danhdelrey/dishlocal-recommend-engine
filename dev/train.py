@@ -7,9 +7,8 @@ from lightfm import LightFM
 from lightfm.data import Dataset
 
 # =================================================================================
-# SCRIPT HUẤN LUYỆN MODEL GỢI Ý - PHIÊN BẢN HOÀN THIỆN (FUTURE-PROOF)
-# - Tự động sử dụng dữ liệu từ post_views, tags, post_tags nếu có.
-# - Hoạt động ổn định ngay cả khi các bảng trên trống.
+# SCRIPT HUẤN LUYỆN MODEL GỢI Ý - PHIÊN BẢN HOÀN THIỆN (V4.0 - FULL METADATA)
+# - Tận dụng TOÀN BỘ metadata: FoodCategory và ReviewChoice.
 # =================================================================================
 
 
@@ -23,35 +22,35 @@ def get_supabase_client() -> Client:
     return create_client(url, key)
 
 def fetch_data(supabase: Client):
-    print("Fetching data from Supabase...")
+    print("Fetching all data from Supabase...")
     
-    # Lấy tất cả user và post để đảm bảo dataset đầy đủ
+    # Lấy dữ liệu chính
     all_users_res = supabase.table('profiles').select('id').execute()
-    all_users_df = pd.DataFrame(all_users_res.data).rename(columns={'id': 'user_id'})
-    
     all_posts_res = supabase.table('posts').select('id, food_category').execute()
-    all_posts_df = pd.DataFrame(all_posts_res.data).rename(columns={'id': 'post_id'})
-
+    
     # Lấy các loại tương tác
     views_res = supabase.table('post_views').select('user_id, post_id').execute()
     likes_res = supabase.table('post_likes').select('user_id, post_id').execute()
     saves_res = supabase.table('post_saves').select('user_id, post_id').execute()
-    reviews_res = supabase.table('post_reviews').select('post_id, rating').filter('rating', 'gte', 4).execute()
+    explicit_reviews_res = supabase.table('post_reviews').select('post_id, rating').filter('rating', 'gte', 4).execute()
     
-    # Lấy dữ liệu đặc trưng (features) nếu có
-    tags_res = supabase.table('tags').select('id, tag_name').execute()
-    post_tags_res = supabase.table('post_tags').select('post_id, tag_id').execute()
+    # <<<--- NÂNG CẤP: Lấy dữ liệu đặc trưng từ review_choices ---
+    review_choices_res = supabase.table('post_reviews').select('post_id, category, selected_choices').execute()
+    # ---------------------------------------------------------->
 
-    # Xử lý tương tác và gán trọng số
-    views_df = pd.DataFrame(views_res.data); views_df['weight'] = 1.0 # Tín hiệu yếu
+    # Xử lý Tương tác
+    all_users_df = pd.DataFrame(all_users_res.data).rename(columns={'id': 'user_id'})
+    all_posts_df = pd.DataFrame(all_posts_res.data).rename(columns={'id': 'post_id'})
+
+    views_df = pd.DataFrame(views_res.data); views_df['weight'] = 1.0
     likes_df = pd.DataFrame(likes_res.data); likes_df['weight'] = 2.0
     saves_df = pd.DataFrame(saves_res.data); saves_df['weight'] = 3.0
     
-    reviews_df = pd.DataFrame(reviews_res.data)
+    reviews_df = pd.DataFrame(explicit_reviews_res.data)
     posts_authors_df = pd.DataFrame(supabase.table('posts').select('id, author_id').execute().data).rename(columns={'id': 'post_id', 'author_id': 'user_id'})
     if not reviews_df.empty and not posts_authors_df.empty:
         reviews_df = pd.merge(reviews_df, posts_authors_df, on='post_id')
-        reviews_df['weight'] = 5.0 # Tín hiệu mạnh nhất
+        reviews_df['weight'] = 5.0
         reviews_df = reviews_df[['user_id', 'post_id', 'weight']]
     else:
         reviews_df = pd.DataFrame(columns=['user_id', 'post_id', 'weight'])
@@ -60,33 +59,44 @@ def fetch_data(supabase: Client):
     if not interactions_df.empty:
         interactions_df = interactions_df.sort_values('weight', ascending=False).drop_duplicates(['user_id', 'post_id'])
 
-    # Xử lý đặc trưng món ăn (item features)
-    # Kết hợp 'food_category' và các 'tags' thành một bộ đặc trưng duy nhất
+    # --- Xử lý Đặc trưng Món ăn (Item Features) ---
+    print("Processing item features...")
     item_features_list = []
+    
     # 1. Thêm food_category làm feature
     if not all_posts_df.empty:
         for _, row in all_posts_df.dropna(subset=['food_category']).iterrows():
+            # Tạo feature có dạng 'category:vietnameseNoodles'
             item_features_list.append({'post_id': row['post_id'], 'feature': f"category:{row['food_category']}"})
     
-    # 2. Thêm các tags từ bảng tags nếu có
-    tags_df = pd.DataFrame(tags_res.data).rename(columns={'id': 'tag_id'})
-    post_tags_df = pd.DataFrame(post_tags_res.data)
-    if not tags_df.empty and not post_tags_df.empty:
-        full_tags_df = pd.merge(post_tags_df, tags_df, on='tag_id')
-        for _, row in full_tags_df.iterrows():
-            item_features_list.append({'post_id': row['post_id'], 'feature': f"tag:{row['tag_name']}"})
+    # <<<--- NÂNG CẤP: Thêm review_choices làm feature ---
+    review_choices_df = pd.DataFrame(review_choices_res.data)
+    if not review_choices_df.empty:
+        for _, row in review_choices_df.iterrows():
+            review_category = row['category'] # ví dụ: 'food', 'ambiance'
+            selected_choices = row.get('selected_choices', []) # list các string, ví dụ: ['foodFlavorful', 'foodFreshIngredients']
+            
+            if selected_choices: # Chỉ xử lý nếu danh sách không rỗng
+                for choice in selected_choices:
+                    # Tạo feature có dạng 'food:foodFlavorful', 'ambiance:ambianceCozy'
+                    feature_string = f"{review_category}:{choice}"
+                    item_features_list.append({'post_id': row['post_id'], 'feature': feature_string})
+    # ----------------------------------------------------->
     
     item_features_df = pd.DataFrame(item_features_list)
     
     print(f"Fetched {len(interactions_df)} interactions, {len(item_features_df)} item features for {len(all_users_df)} users.")
     return interactions_df, item_features_df, all_users_df, all_posts_df
 
-# --- PHẦN 2: CHUẨN BỊ DỮ LIỆU & HUẤN LUYỆN MODEL (TRANSFORM & TRAIN) ---
+
+# --- CÁC HÀM train_model và generate_and_load KHÔNG CẦN THAY ĐỔI ---
+# Chúng đã được thiết kế để nhận vào một danh sách đặc trưng chung
+# Bạn chỉ cần đảm bảo hàm fetch_data chuẩn bị đúng item_features_df
+
 def train_model(interactions_df, item_features_df, all_users_df, all_posts_df):
     print("Preparing data and training model...")
     dataset = Dataset()
     
-    # Fit dataset với TẤT CẢ user, item và feature có thể có
     all_possible_features = []
     if not item_features_df.empty:
         all_possible_features = item_features_df['feature'].unique()
@@ -97,27 +107,23 @@ def train_model(interactions_df, item_features_df, all_users_df, all_posts_df):
         item_features=all_possible_features
     )
 
-    # Xây dựng ma trận tương tác
     (interactions_matrix, weights_matrix) = dataset.build_interactions(
         (row['user_id'], row['post_id'], row['weight']) for index, row in interactions_df.iterrows()
     )
     
-    # Xây dựng ma trận đặc trưng (nếu có dữ liệu)
     item_features_matrix = None
     if not item_features_df.empty:
-        # Gom nhóm các feature cho mỗi post_id
         features_grouped = item_features_df.groupby('post_id')['feature'].apply(list)
         item_features_iterable = ((post_id, features) for post_id, features in features_grouped.items())
         item_features_matrix = dataset.build_item_features(item_features_iterable, normalize=True)
 
-    # Huấn luyện model
     model = LightFM(loss='warp', no_components=30, learning_rate=0.05, random_state=42)
     model.fit(weights_matrix, item_features=item_features_matrix, epochs=20, verbose=True)
     print("DEBUG: Model training has finished successfully.")
     
     return model, dataset, item_features_matrix, interactions_matrix
 
-# --- PHẦN 3: TẠO GỢI Ý VÀ LƯU VÀO DATABASE (LOAD) ---
+
 def generate_and_load(supabase: Client, model: LightFM, dataset: Dataset, item_features_matrix, interactions_matrix, all_users_df):
     print("Generating and loading recommendations...")
     user_id_map, _, item_id_map, _ = dataset.mapping()
@@ -127,11 +133,10 @@ def generate_and_load(supabase: Client, model: LightFM, dataset: Dataset, item_f
     for user_id in all_users_df['user_id']:
         user_index = user_id_map.get(user_id)
         if user_index is None:
-            continue # Bỏ qua nếu user không có trong map (trường hợp hiếm)
+            continue
 
         scores = model.predict(user_index, all_item_indices, item_features=item_features_matrix)
         
-        # Lọc ra những món đã tương tác nếu người dùng có trong ma trận tương tác
         if user_index < interactions_matrix.shape[0]:
             known_positives_indices = interactions_matrix.tocsr()[user_index].indices
             scores[known_positives_indices] = -np.inf
@@ -145,21 +150,20 @@ def generate_and_load(supabase: Client, model: LightFM, dataset: Dataset, item_f
                     'user_id': user_id, 
                     'post_id': post_id, 
                     'score': float(scores[item_index]), 
-                    'model_version': 'lightfm_v3.0_hybrid'
+                    'model_version': 'lightfm_v4.0_full_meta' # Cập nhật phiên bản
                 })
 
     if recommendations_to_upsert:
         print(f"Upserting {len(recommendations_to_upsert)} recommendations...")
-        supabase.table('user_post_recommendations').delete().eq('model_version', 'lightfm_v3.0_hybrid').execute()
+        supabase.table('user_post_recommendations').delete().eq('model_version', 'lightfm_v4.0_full_meta').execute()
         supabase.table('user_post_recommendations').upsert(recommendations_to_upsert).execute()
         print("Upsert completed.")
 
-# --- HÀM MAIN ĐỂ CHẠY TOÀN BỘ QUY TRÌNH ---
+
 if __name__ == '__main__':
     supabase_client = get_supabase_client()
     interactions, item_features, all_users, all_posts = fetch_data(supabase_client)
     
-    # Chỉ chạy huấn luyện nếu có ít nhất một tương tác
     if not interactions.empty:
         trained_model, data_dataset, features_mat, interactions_mat = train_model(interactions, item_features, all_users, all_posts)
         generate_and_load(supabase_client, trained_model, data_dataset, features_mat, interactions_mat, all_users)
