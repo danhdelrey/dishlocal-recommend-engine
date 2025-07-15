@@ -3,18 +3,15 @@ name: Dishlocal Model Training
 
 # Các sự kiện sẽ kích hoạt workflow này
 on:
-  # 1. Kích hoạt cho môi trường Production
   schedule:
     # Chạy tự động vào lúc 2 giờ sáng (UTC) mỗi ngày
     - cron: '0 2 * * *'
   
-  # 2. Kích hoạt khi có code được đẩy lên
   push:
     branches:
       - main     # Kích hoạt khi đẩy lên nhánh 'main' (cho Production)
       - develop  # Kích hoạt khi đẩy lên nhánh 'develop' (cho Development)
 
-  # 3. Cho phép chạy thủ công từ giao diện GitHub
   workflow_dispatch:
 
 # Các công việc cần thực hiện
@@ -33,6 +30,15 @@ jobs:
         with:
           python-version: '3.10'
 
+      # ================================================================
+      # BƯỚC MỚI ĐƯỢC THÊM VÀO ĐỂ SỬA LỖI
+      # Bước 2.5: Cài đặt các công cụ build cần thiết cho LightFM
+      # ================================================================
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
       # Bước 3: Cài đặt tất cả các thư viện từ requirements.txt
       - name: Install dependencies
         run: |
@@ -40,21 +46,17 @@ jobs:
           pip install -r requirements.txt
 
       # Bước 4: Chạy script cho môi trường Production
-      # Điều kiện: Chỉ chạy khi workflow được kích hoạt từ nhánh `main` HOẶC chạy theo lịch trình
       - name: Run Production Training Script
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || github.event_name == 'schedule'
         run: python prod/train.py
         env:
-          # Sử dụng secrets của môi trường Production
           SUPABASE_URL: ${{ secrets.SUPABASE_PROD_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_PROD_SERVICE_KEY }}
 
       # Bước 5: Chạy script cho môi trường Development
-      # Điều kiện: Chỉ chạy khi workflow được kích hoạt từ nhánh `develop`
       - name: Run Development Training Script
         if: github.ref == 'refs/heads/develop'
         run: python dev/train.py
         env:
-          # Sử dụng secrets của môi trường Development
           SUPABASE_URL: ${{ secrets.SUPABASE_DEV_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_DEV_SERVICE_KEY }}
