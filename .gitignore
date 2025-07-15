@@ -1,0 +1,28 @@
+# Virtual envs
+/venv/
+/.venv/
+/venv-linux/
+
+dev/venv/
+prod/venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Jupyter Notebook
+**/.ipynb_checkpoints
+
+# Env file
+.env
+*.env
+
+# VSCode settings
+.vscode/
+
+# MacOS & system files
+.DS_Store
+Thumbs.db

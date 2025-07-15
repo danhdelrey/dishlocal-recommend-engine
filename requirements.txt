@@ -1,0 +1,6 @@
+lightfm
+supabase
+pandas
+numpy
+python-dotenv
+scikit-learn
