@@ -31,13 +31,14 @@ jobs:
           python-version: '3.10'
 
       # ================================================================
-      # BƯỚC MỚI ĐƯỢC THÊM VÀO ĐỂ SỬA LỖI
-      # Bước 2.5: Cài đặt các công cụ build cần thiết cho LightFM
+      # SỬA LỖI CUỐI CÙNG Ở ĐÂY
+      # Bước 2.5: Cài đặt ĐẦY ĐỦ các công cụ build
       # ================================================================
-      - name: Install build tools
+      - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential
+          # Cài cả trình biên dịch VÀ các file header của Python 3.10
+          sudo apt-get install -y build-essential python3.10-dev
 
       # Bước 3: Cài đặt tất cả các thư viện từ requirements.txt
       - name: Install dependencies
