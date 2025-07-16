@@ -3,8 +3,9 @@ name: Dishlocal Model Daily Training
 
 on:
   schedule:
-    # Chạy tự động vào lúc 2 giờ sáng (UTC) mỗi ngày
-    - cron: '*/5 * * * *'
+    - cron: '0 23 * * *'  # 6:00 sáng VN
+    - cron: '0 3 * * *'   # 10:00 sáng VN
+    - cron: '0 9 * * *'   # 16:00 chiều VN
   
   push:
     branches:
