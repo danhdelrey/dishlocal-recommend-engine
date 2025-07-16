@@ -1,5 +1,5 @@
 # Tên của workflow, sẽ hiển thị trên tab Actions của GitHub
-name: Dishlocal Model Training
+name: Dishlocal Model Daily Training
 
 on:
   schedule:
