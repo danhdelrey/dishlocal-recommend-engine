@@ -8,13 +8,14 @@ from lightfm.data import Dataset
 import math
 
 # =================================================================================
-# SCRIPT HUẤN LUYỆN MODEL GỢI Ý - PHIÊN BẢN V5.0 (TIME-AWARE & RE-RANKING)
-# - Hiểu và gán trọng số cho thời gian xem (view_duration_ms).
-# - Đẩy các món đã tương tác xuống cuối danh sách thay vì loại bỏ.
+# SCRIPT HUẤN LUYỆN MODEL GỢI Ý - PHIÊN BẢN V6.0 (SENTIMENT-AWARE)
+# - Phân biệt và học từ cả tương tác Tích cực và Tiêu cực.
+# - Xử lý các trường hợp review mâu thuẫn.
+# - Giữ lại tất cả các đặc trưng để xây dựng hồ sơ người dùng hoàn chỉnh.
 # =================================================================================
 
 
-# --- PHẦN 1: KẾT NỐI VÀ TRÍCH XUẤT DỮ LIỆU (EXTRACT) ---
+# --- PHẦN 1: KẾT NỐI VÀ CÁC HÀM TIỆN ÍCH ---
 def get_supabase_client() -> Client:
     load_dotenv()
     url = os.environ.get("SUPABASE_URL")
@@ -23,79 +24,82 @@ def get_supabase_client() -> Client:
         raise ValueError("Supabase URL and Key must be set in .env file")
     return create_client(url, key)
 
+# --- PHẦN 2: TRÍCH XUẤT VÀ XỬ LÝ DỮ LIỆU (LOGIC MỚI) ---
 def fetch_data(supabase: Client):
     print("Fetching all data from Supabase...")
     
     # Lấy dữ liệu chính
     all_users_res = supabase.table('profiles').select('id').execute()
-    all_posts_res = supabase.table('posts').select('id, food_category').execute()
+    all_posts_res = supabase.table('posts').select('id, food_category, author_id').execute()
     
-    # --- NÂNG CẤP: Lấy thêm cả cột view_duration_ms ---
+    # Lấy TẤT CẢ các loại tương tác
     views_res = supabase.table('post_views').select('user_id, post_id, view_duration_ms').execute()
     likes_res = supabase.table('post_likes').select('user_id, post_id').execute()
     saves_res = supabase.table('post_saves').select('user_id, post_id').execute()
-    explicit_reviews_res = supabase.table('post_reviews').select('post_id, rating').filter('rating', 'gte', 4).execute()
-    review_choices_res = supabase.table('post_reviews').select('post_id, category, selected_choices').execute()
+    # Lấy TẤT CẢ reviews, không lọc theo rating nữa
+    all_reviews_res = supabase.table('post_reviews').select('post_id, category, selected_choices, rating').execute()
 
-    # Xử lý Dữ liệu chính
     all_users_df = pd.DataFrame(all_users_res.data).rename(columns={'id': 'user_id'})
     all_posts_df = pd.DataFrame(all_posts_res.data).rename(columns={'id': 'post_id'})
 
-    # --- Xử lý Tương tác với logic gán trọng số mới ---
+    # --- Xử lý Tương tác với logic Tích cực/Tiêu cực ---
     interaction_dfs = []
 
-    # 1. Xử lý Lượt xem (Time-aware)
+    # 1. Xử lý Lượt xem (Time-aware) - Luôn là tín hiệu dương
     views_df = pd.DataFrame(views_res.data)
     if not views_df.empty:
         def calculate_view_weight(duration_ms):
-            if pd.isna(duration_ms) or duration_ms <= 0:
-                return 1.0  # Impression, tín hiệu yếu
-            # Dùng log để trọng số không tăng quá nhanh.
-            # 1.5 + log(thời gian xem (s) + 1)
+            if pd.isna(duration_ms) or duration_ms <= 0: return 1.0
             return 1.5 + math.log((duration_ms / 1000) + 1)
-        
         views_df['weight'] = views_df['view_duration_ms'].apply(calculate_view_weight)
         interaction_dfs.append(views_df[['user_id', 'post_id', 'weight']])
 
-    # 2. Xử lý các tương tác tường minh khác
-    likes_df = pd.DataFrame(likes_res.data)
-    if not likes_df.empty:
-        likes_df['weight'] = 4.0
-        interaction_dfs.append(likes_df)
+    # 2. Xử lý Likes và Saves - Luôn là tín hiệu dương
+    likes_df = pd.DataFrame(likes_res.data); likes_df['weight'] = 4.0
+    saves_df = pd.DataFrame(saves_res.data); saves_df['weight'] = 5.0
+    if not likes_df.empty: interaction_dfs.append(likes_df)
+    if not saves_df.empty: interaction_dfs.append(saves_df)
+    
+    # 3. Xử lý Reviews (Cả Tích cực và Tiêu cực)
+    reviews_df = pd.DataFrame(all_reviews_res.data)
+    if not reviews_df.empty:
+        # Cần author_id để biết ai là người review
+        posts_authors_df = all_posts_df[['post_id', 'author_id']].rename(columns={'author_id': 'user_id'})
+        reviews_with_user_df = pd.merge(reviews_df, posts_authors_df, on='post_id')
 
-    saves_df = pd.DataFrame(saves_res.data)
-    if not saves_df.empty:
-        saves_df['weight'] = 5.0
-        interaction_dfs.append(saves_df)
+        def calculate_review_weight(rating):
+            if rating >= 4: return 7.0   # Rất tích cực
+            if rating <= 2: return -5.0  # Rất tiêu cực
+            return 0.0 # Rating 3 sao, trung tính, không đưa vào tương tác có trọng số
+
+        reviews_with_user_df['weight'] = reviews_with_user_df['rating'].apply(calculate_review_weight)
+        # Chỉ lấy các review có trọng số khác 0
+        weighted_reviews = reviews_with_user_df[reviews_with_user_df['weight'] != 0.0]
+        if not weighted_reviews.empty:
+            interaction_dfs.append(weighted_reviews[['user_id', 'post_id', 'weight']])
     
-    reviews_df = pd.DataFrame(explicit_reviews_res.data)
-    posts_authors_df = pd.DataFrame(supabase.table('posts').select('id, author_id').execute().data).rename(columns={'id': 'post_id', 'author_id': 'user_id'})
-    if not reviews_df.empty and not posts_authors_df.empty:
-        reviews_df = pd.merge(reviews_df, posts_authors_df, on='post_id')
-        reviews_df['weight'] = 7.0 # Tín hiệu mạnh nhất
-        interaction_dfs.append(reviews_df[['user_id', 'post_id', 'weight']])
-    
-    # Gộp tất cả các tương tác và lấy trọng số cao nhất cho mỗi cặp (user, post)
+    # Gộp tất cả các tương tác và xử lý trường hợp có cả tương tác dương và âm
     if not interaction_dfs:
         interactions_df = pd.DataFrame(columns=['user_id', 'post_id', 'weight'])
     else:
-        interactions_df = pd.concat(interaction_dfs)
-        interactions_df = interactions_df.groupby(['user_id', 'post_id'])['weight'].max().reset_index()
+        # Thay vì lấy max, chúng ta sẽ SUM các trọng số.
+        # Điều này cho phép tín hiệu tiêu cực "triệt tiêu" bớt tín hiệu tích cực.
+        full_interactions_df = pd.concat(interaction_dfs)
+        interactions_df = full_interactions_df.groupby(['user_id', 'post_id'])['weight'].sum().reset_index()
 
 
-    # --- Xử lý Đặc trưng Món ăn (Item Features) ---
+    # --- Xử lý Đặc trưng Món ăn (Item Features) - Giữ lại tất cả ---
     print("Processing item features...")
     item_features_list = []
     
-    # 1. Thêm food_category làm feature
+    # 1. Thêm food_category
     if not all_posts_df.empty:
         for _, row in all_posts_df.dropna(subset=['food_category']).iterrows():
             item_features_list.append({'post_id': row['post_id'], 'feature': f"category:{row['food_category']}"})
     
-    # 2. Thêm review_choices làm feature
-    review_choices_df = pd.DataFrame(review_choices_res.data)
-    if not review_choices_df.empty:
-        for _, row in review_choices_df.iterrows():
+    # 2. Thêm TẤT CẢ review_choices làm feature
+    if not reviews_df.empty:
+        for _, row in reviews_df.iterrows():
             review_category = row['category']
             selected_choices = row.get('selected_choices')
             if selected_choices and isinstance(selected_choices, list):
@@ -108,7 +112,7 @@ def fetch_data(supabase: Client):
     print(f"Fetched {len(interactions_df)} interactions, {len(item_features_df)} item features for {len(all_users_df)} users.")
     return interactions_df, item_features_df, all_users_df, all_posts_df
 
-# --- PHẦN 2: HUẤN LUYỆN MODEL ---
+# --- PHẦN 3: HUẤN LUYỆN MODEL ---
 def train_model(interactions_df, item_features_df, all_users_df, all_posts_df):
     print("Preparing data and training model...")
     dataset = Dataset()
@@ -133,34 +137,33 @@ def train_model(interactions_df, item_features_df, all_users_df, all_posts_df):
         item_features_iterable = ((post_id, features) for post_id, features in features_grouped.items())
         item_features_matrix = dataset.build_item_features(item_features_iterable, normalize=True)
 
-    model = LightFM(loss='warp', no_components=30, learning_rate=0.05, random_state=42)
+    # NÂNG CẤP: Sử dụng loss 'logistic' phù hợp hơn cho cả trọng số âm và dương
+    model = LightFM(loss='logistic', no_components=30, learning_rate=0.05, random_state=42)
     model.fit(weights_matrix, item_features=item_features_matrix, epochs=20, verbose=True)
     print("DEBUG: Model training has finished successfully.")
     
     return model, dataset, item_features_matrix, interactions_matrix
 
-# --- PHẦN 3: TẠO GỢI Ý ---
+# --- PHẦN 4: TẠO GỢI Ý ---
 def generate_and_load(supabase: Client, model: LightFM, dataset: Dataset, item_features_matrix, interactions_matrix, all_users_df):
     print("Generating and loading recommendations...")
     user_id_map, _, item_id_map, _ = dataset.mapping()
     all_item_indices = np.arange(len(item_id_map))
     recommendations_to_upsert = []
 
-    # Một giá trị âm lớn nhưng hữu hạn để đẩy các món đã xem xuống cuối
     REORDER_PENALTY = -999.0
 
     for user_id in all_users_df['user_id']:
         user_index = user_id_map.get(user_id)
-        if user_index is None:
-            continue
+        if user_index is None: continue
 
         scores = model.predict(user_index, all_item_indices, item_features=item_features_matrix)
         
         if user_index < interactions_matrix.shape[0]:
-            known_positives_indices = interactions_matrix.tocsr()[user_index].indices
-            
-            # Gán một điểm phạt để đẩy xuống cuối thay vì loại bỏ
-            scores[known_positives_indices] = REORDER_PENALTY
+            # Chỉ phạt những món có tương tác TÍCH CỰC
+            user_interactions = interactions_matrix.tocsr()[user_index]
+            positive_indices = user_interactions.indices[user_interactions.data > 0]
+            scores[positive_indices] = REORDER_PENALTY
 
         top_indices = np.argsort(-scores)[:100]
         
@@ -170,24 +173,23 @@ def generate_and_load(supabase: Client, model: LightFM, dataset: Dataset, item_f
                 'user_id': user_id, 
                 'post_id': post_id, 
                 'score': float(scores[item_index]), 
-                'model_version': 'lightfm_v5.0_time_aware' # Cập nhật phiên bản model
+                'model_version': 'lightfm_v6.0_sentiment_aware'
             })
 
     if recommendations_to_upsert:
         print(f"Upserting {len(recommendations_to_upsert)} recommendations...")
-        # Xóa các gợi ý cũ của model này trước khi thêm mới
-        supabase.table('user_post_recommendations').delete().eq('model_version', 'lightfm_v5.0_time_aware').execute()
-        # Dùng upsert để ghi dữ liệu mới
+        supabase.table('user_post_recommendations').delete().eq('model_version', 'lightfm_v6.0_sentiment_aware').execute()
         supabase.table('user_post_recommendations').upsert(recommendations_to_upsert).execute()
         print("Upsert completed.")
 
-# --- PHẦN 4: HÀM MAIN ĐỂ CHẠY ---
+# --- PHẦN 5: HÀM MAIN ĐỂ CHẠY ---
 if __name__ == '__main__':
     supabase_client = get_supabase_client()
     interactions, item_features, all_users, all_posts = fetch_data(supabase_client)
     
-    if not interactions.empty:
+    # Chỉ chạy nếu có dữ liệu user và post
+    if not all_users.empty and not all_posts.empty:
         trained_model, data_dataset, features_mat, interactions_mat = train_model(interactions, item_features, all_users, all_posts)
         generate_and_load(supabase_client, trained_model, data_dataset, features_mat, interactions_mat, all_users)
     else:
-        print("No interaction data found. Skipping training.")
+        print("No users or posts found. Skipping training.")
