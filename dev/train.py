@@ -165,7 +165,7 @@ def generate_and_load(supabase: Client, model: LightFM, dataset: Dataset, item_f
             positive_indices = user_interactions.indices[user_interactions.data > 0]
             scores[positive_indices] = REORDER_PENALTY
 
-        top_indices = np.argsort(-scores)[:100]
+        top_indices = np.argsort(-scores)[:500]
         
         for item_index in top_indices:
             post_id = list(item_id_map.keys())[item_index]
